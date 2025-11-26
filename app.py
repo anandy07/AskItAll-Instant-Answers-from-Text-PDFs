@@ -1,87 +1,126 @@
 import streamlit as st
-import PyPDF2
 import re
+import PyPDF2
 from sentence_transformers import SentenceTransformer, util
 
-# --- Load embedding model ---
+# ================================
+# Load Embedding Model (Cached)
+# ================================
 @st.cache_resource
 def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 model = load_model()
 
-# --- Helper Functions ---
+# ================================
+# Extract Text From PDF
+# ================================
 def extract_text_from_pdf(uploaded_file):
-    """Extract text from uploaded PDF."""
-    reader = PyPDF2.PdfReader(uploaded_file)
     text = ""
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
+    try:
+        reader = PyPDF2.PdfReader(uploaded_file)
+        for page in reader.pages:
+            try:
+                page_text = page.extract_text() or ""
+            except:
+                page_text = ""
             text += page_text + " "
+    except Exception as e:
+        st.error(f"Error reading PDF: {e}")
     return text
 
+# ================================
+# Clean & Split Text Into Sentences
+# ================================
 def preprocess(text):
-    """Clean and split text into paragraphs for better context."""
-    text = text.lower()
-    text = re.sub(r"\s+", " ", text)
-    paragraphs = text.split(". ")  # split by sentence-ending periods
-    return [p.strip() for p in paragraphs if p.strip()]
+    text = re.sub(r"\s+", " ", text)  # normalize spaces
 
-def answer_question(question, sentences, top_n=3):
-    """Return top N most semantically relevant sentences for the question."""
-    # Encode all sentences and question
-    sentence_embeddings = model.encode(sentences, convert_to_tensor=True)
+    # Split into sentences using punctuation marks
+    sentences = re.split(r'(?<=[.!?]) +', text)
+
+    # Remove extremely short fragments
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+    return sentences
+
+# ================================
+# Answer Questions Using Semantic Search
+# ================================
+def answer_question(question, sentences, sentence_embeddings, top_n=3):
     question_embedding = model.encode(question, convert_to_tensor=True)
-
-    # Compute cosine similarity
     cosine_scores = util.pytorch_cos_sim(question_embedding, sentence_embeddings)[0]
 
-    # Get top N indices
     top_indices = cosine_scores.argsort(descending=True)[:top_n]
-    top_answers = [sentences[i] for i in top_indices]
-    return top_answers
 
-# --- Streamlit UI ---
+    results = []
+    for i in top_indices:
+        results.append({
+            "sentence": sentences[i],
+            "score": float(cosine_scores[i])
+        })
+
+    return results
+
+# ================================
+# Streamlit UI
+# ================================
 st.set_page_config(page_title="📖 AskItAll", layout="wide", page_icon="📚")
 st.title("📖 AskItAll – Instant Answers from Text & PDFs")
-st.markdown("Ask questions from your text or PDF book easily!")
+st.markdown("Ask questions from your text or PDF and get instant AI-powered answers!")
 
-# Store sentences in session state
+# Initialize memory
 if "sentences" not in st.session_state:
     st.session_state.sentences = None
+if "embeddings" not in st.session_state:
+    st.session_state.embeddings = None
 
-# --- Sidebar ---
+# Sidebar
 st.sidebar.header("📌 Input Options")
-st.sidebar.info(
-    """
-    1. Paste your text or upload a PDF.
-    2. Click 'Process' button below the input.
-    3. Once processed, type your question and click 'Get Answers'.
-    """
-)
 option = st.sidebar.radio("Choose Input Type:", ["Paste Text", "Upload PDF"])
 
-# --- Input Section with Buttons ---
+st.sidebar.info(
+    """
+    ✔ Paste text OR upload a PDF  
+    ✔ Click **Process**  
+    ✔ Ask questions  
+    ✔ Get AI-powered answers instantly  
+    """
+)
+
+# ================================
+# Input Section
+# ================================
 if option == "Paste Text":
-    text_input = st.text_area("Paste or type your text here:")
+    text_input = st.text_area("Paste or type your text here:", height=200)
+
     if st.button("Process Text"):
         if text_input.strip() == "":
             st.warning("❗ Please enter some text first.")
         else:
-            st.session_state.sentences = preprocess(text_input)
+            sentences = preprocess(text_input)
+            embeddings = model.encode(sentences, convert_to_tensor=True)
+
+            st.session_state.sentences = sentences
+            st.session_state.embeddings = embeddings
+
             st.success("✅ Text processed! You can now ask questions.")
 
 elif option == "Upload PDF":
     uploaded_file = st.file_uploader("Upload a PDF book", type="pdf")
-    if uploaded_file:
-        if st.button("Process PDF"):
-            with st.spinner("Processing PDF..."):
-                text = extract_text_from_pdf(uploaded_file)
-                st.session_state.sentences = preprocess(text)
-            st.success("✅ PDF uploaded and processed! You can now ask questions.")
 
-# --- Q&A Section ---
+    if uploaded_file and st.button("Process PDF"):
+        with st.spinner("Processing PDF..."):
+            text = extract_text_from_pdf(uploaded_file)
+            sentences = preprocess(text)
+            embeddings = model.encode(sentences, convert_to_tensor=True)
+
+            st.session_state.sentences = sentences
+            st.session_state.embeddings = embeddings
+
+        st.success("✅ PDF uploaded & processed! You can now ask questions.")
+
+# ================================
+# Question Answering Section
+# ================================
 if st.session_state.sentences:
     question = st.text_input("Ask your question here:")
 
@@ -90,21 +129,28 @@ if st.session_state.sentences:
             st.warning("❗ Please enter a question first.")
         else:
             with st.spinner("Searching for answers..."):
-                answers = answer_question(question, st.session_state.sentences, top_n=3)
+                results = answer_question(
+                    question,
+                    st.session_state.sentences,
+                    st.session_state.embeddings,
+                    top_n=3
+                )
 
             st.subheader("🔍 Top Answers:")
-            for i, ans in enumerate(answers, 1):
+            for i, r in enumerate(results, 1):
                 st.markdown(
                     f"""
                     <div style='
                         background-color:#f0f2f6;
-                        color: #000000;
+                        color:#000;
                         padding:15px;
                         border-radius:10px;
                         margin-bottom:10px;
-                        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+                        box-shadow:2px 2px 5px rgba(0,0,0,0.15);
                     '>
-                    <b>{i}.</b> {ans}
+                        <b>{i}. (Score: {r["score"]:.4f})</b><br>
+                        {r["sentence"]}
                     </div>
-                    """, unsafe_allow_html=True
+                    """,
+                    unsafe_allow_html=True
                 )
