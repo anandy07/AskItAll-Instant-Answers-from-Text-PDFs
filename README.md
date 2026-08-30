@@ -8,12 +8,6 @@
 
 **AskItAll** allows you to bypass the need for manual reading and searching. Simply upload a document, ask a question, and get the most relevant information delivered to you instantly.
 
----
-
-## ✨ Demo
-
-![AskItAll Demo GIF](https://your-link-to-a-demo-gif.com/demo.gif)
-*(**Note**: You should record a short GIF of your app working and replace the link above.)*
 
 ---
 
